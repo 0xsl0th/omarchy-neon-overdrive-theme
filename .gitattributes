@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.jpg binary
+*.png binary
+*.mp4 binary
+*.qml text eol=lf
+*.toml text eol=lf
+*.sh text eol=lf

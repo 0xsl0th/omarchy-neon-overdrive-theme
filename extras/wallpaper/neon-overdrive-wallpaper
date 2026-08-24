@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+# Managed by Neon Overdrive install.sh.
+
+set -Eeuo pipefail
+
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+runtime_dir="${XDG_RUNTIME_DIR:-}"
+video="$data_home/neon-overdrive/neon-city-loop.mp4"
+pid_file="${runtime_dir:+$runtime_dir/}neon-overdrive-wallpaper.pid"
+
+is_ours() {
+  local pid="${1:-}"
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  [[ -r "/proc/$pid/cmdline" ]] || return 1
+  tr '\0' ' ' <"/proc/$pid/cmdline" | grep -Fq -- "$video"
+}
+
+stop_wallpaper() {
+  local pid=""
+
+  if [[ -n "$runtime_dir" && -r "$pid_file" ]]; then
+    read -r pid <"$pid_file" || true
+    if is_ours "$pid"; then
+      kill "$pid"
+      for _ in {1..40}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+      done
+    fi
+    rm -f -- "$pid_file"
+  fi
+}
+
+case "${1:-start}" in
+  start) ;;
+  stop)
+    stop_wallpaper
+    exit 0
+    ;;
+  *)
+    printf 'Usage: %s [start|stop]\n' "${0##*/}" >&2
+    exit 2
+    ;;
+esac
+
+command -v mpvpaper >/dev/null 2>&1 || {
+  printf 'Neon Overdrive: mpvpaper is not installed.\n' >&2
+  exit 127
+}
+[[ -n "$runtime_dir" ]] || {
+  printf 'Neon Overdrive: XDG_RUNTIME_DIR is unavailable.\n' >&2
+  exit 1
+}
+[[ -r "$video" ]] || {
+  printf 'Neon Overdrive wallpaper is missing: %s\n' "$video" >&2
+  exit 1
+}
+
+if [[ -r "$pid_file" ]]; then
+  read -r existing_pid <"$pid_file" || true
+  is_ours "$existing_pid" && exit 0
+fi
+
+printf '%s\n' "$$" >"$pid_file"
+trap 'rm -f -- "$pid_file"' EXIT
+
+mpvpaper \
+  --auto-pause \
+  --mpv-options 'no-audio loop-file=inf hwdec=no profile=fast really-quiet osc=no input-default-bindings=no scale=bilinear cscale=bilinear dscale=bilinear deband=no' \
+  ALL "$video" &
+wallpaper_pid=$!
+
+printf '%s\n' "$wallpaper_pid" >"$pid_file"
+trap 'kill "$wallpaper_pid" 2>/dev/null || true; rm -f -- "$pid_file"' EXIT INT TERM HUP
+wait "$wallpaper_pid"
