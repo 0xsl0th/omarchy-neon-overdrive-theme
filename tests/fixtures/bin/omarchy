@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ ${1:-} == plugin && ${2:-} == list && ${3:-} == --json ]]; then
+  if [[ -f $HOME/.config/omarchy/plugins/neon-overdrive.cava/manifest.json ]]; then
+    printf '%s\n' '[{"id":"neon-overdrive.cava","enabled":true},{"id":"omarchy.background","enabled":true}]'
+  else
+    printf '%s\n' '[{"id":"sloth.cava","enabled":true},{"id":"omarchy.background","enabled":true}]'
+  fi
+fi
+
+exit 0

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "bar": {
+    "layout": {
+      "left": [
+        { "id": "omarchy.workspaces" }
+      ],
+      "center": [
+        { "id": "sloth.cava", "prototypeSetting": 7 },
+        { "id": "omarchy.clock" }
+      ],
+      "right": []
+    }
+  },
+  "plugins": []
+}

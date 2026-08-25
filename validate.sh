@@ -19,6 +19,14 @@ required=(
   assets/neon-city-loop.mp4 extras/plugin/manifest.json
   extras/plugin/Service.qml extras/plugin/BarWidget.qml extras/plugin/cava.conf
   extras/wallpaper/neon-overdrive-wallpaper
+  tests/install-lifecycle.sh tests/fixtures/shell-fixture.json
+  tests/fixtures/theme.name tests/fixtures/autostart.lua
+  tests/fixtures/autostart-restored.lua
+  tests/fixtures/legacy-plugin/manifest.json
+  tests/fixtures/legacy-plugin/BarWidget.qml
+  tests/fixtures/legacy-plugin/prototype.txt
+  tests/fixtures/bin/omarchy tests/fixtures/bin/omarchy-shell
+  tests/fixtures/bin/hyprctl tests/fixtures/bin/cava tests/fixtures/bin/mpvpaper
 )
 for path in "${required[@]}"; do
   [[ -f $path ]] || fail "missing $path"
@@ -26,17 +34,41 @@ done
 
 [[ -z $(find . -type l -print -quit) ]] || fail "symlinks are not allowed"
 [[ -z $(find . -type f -name shell.json -print -quit) ]] || fail "full shell.json files must not be shipped"
-if rg -n --hidden --glob '!*.png' --glob '!*.jpg' --glob '!*.mp4' '/home/[[:alnum:]_.-]+/' .; then
+if rg -n --hidden --glob '!.git/**' --glob '!*.png' --glob '!*.jpg' --glob '!*.mp4' '/home/[[:alnum:]_.-]+/' .; then
   fail "found a hard-coded home directory"
 fi
-if rg -n --hidden --glob '!*.png' --glob '!*.jpg' --glob '!*.mp4' 'sloth\.cava|"author"[[:space:]]*:[[:space:]]*"sloth"' .; then
+if rg -n 'sloth\.cava|"author"[[:space:]]*:[[:space:]]*"sloth"' extras/plugin; then
   fail "found a legacy plugin identity"
 fi
 
-jq -e '.schemaVersion == 1 and .id == "neon-overdrive.cava" and .author == "0xsl0th"' \
+jq -e '
+  .schemaVersion == 1 and
+  .id == "neon-overdrive.cava" and
+  .author == "0xsl0th" and
+  (.kinds | index("service")) != null and
+  (.kinds | index("bar-widget")) != null and
+  .barWidget.defaults.wallpaperReactive == true and
+  .barWidget.defaults.wallpaperIntensity == 60
+' \
   extras/plugin/manifest.json >/dev/null
+
+cava_bars=$(awk -F= '$1 ~ /^[[:space:]]*bars[[:space:]]*$/ { gsub(/[[:space:]]/, "", $2); print $2 }' extras/plugin/cava.conf)
+service_bars=$(sed -n 's/.*readonly property int barCount: \([0-9][0-9]*\).*/\1/p' extras/plugin/Service.qml)
+[[ -n $cava_bars && $cava_bars == "$service_bars" ]] || fail "Cava and service bar counts differ"
+
+grep -Fq 'input-ipc-server=$ipc_socket' extras/wallpaper/neon-overdrive-wallpaper || \
+  fail "wallpaper IPC socket is not configured"
+grep -Fq 'wallpaper_status()' extras/wallpaper/neon-overdrive-wallpaper || \
+  fail "wallpaper launcher has no readiness check"
+grep -Fq 'ready_file=' extras/wallpaper/neon-overdrive-wallpaper || \
+  fail "wallpaper launcher has no post-handoff ready marker"
+grep -Fq 'wait_for_wallpaper 10' install.sh || \
+  fail "installer does not verify stable wallpaper readiness"
+grep -Fq 'Socket {' extras/plugin/Service.qml || fail "reactive service has no persistent wallpaper socket"
+grep -Fq 'sendWallpaperGrade(true)' extras/plugin/Service.qml || fail "reactive wallpaper has no neutral reset"
 luac -p hyprland.lua
-bash -n install.sh uninstall.sh validate.sh extras/wallpaper/neon-overdrive-wallpaper
+bash -n install.sh uninstall.sh validate.sh extras/wallpaper/neon-overdrive-wallpaper \
+  tests/install-lifecycle.sh tests/fixtures/bin/*
 sha256sum -c ASSETS.sha256
 
 # Guard the non-destructive autostart update invariant: managed markers must be
@@ -79,13 +111,24 @@ if command -v ffprobe >/dev/null 2>&1; then
   ' <<<"$video_json" >/dev/null || fail "unexpected wallpaper encoding"
 fi
 
-if command -v strings >/dev/null 2>&1; then
-  strings -a neon-city-source.png | grep -Fq 'OpenAI Media Service' || fail "source C2PA signer is missing"
-  strings -a neon-city-source.png | grep -Fq 'c2pa.claim.v2' || fail "source C2PA claim is missing"
-fi
+grep -aFq 'OpenAI Media Service' neon-city-source.png || fail "source C2PA signer is missing"
+grep -aFq 'c2pa.claim.v2' neon-city-source.png || fail "source C2PA claim is missing"
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck install.sh uninstall.sh validate.sh extras/wallpaper/neon-overdrive-wallpaper
+  shellcheck install.sh uninstall.sh validate.sh extras/wallpaper/neon-overdrive-wallpaper \
+    tests/install-lifecycle.sh tests/fixtures/bin/*
+fi
+
+qmlformat_bin=""
+command -v qmlformat >/dev/null 2>&1 && qmlformat_bin=$(command -v qmlformat)
+[[ -n $qmlformat_bin || ! -x /usr/lib/qt6/bin/qmlformat ]] || qmlformat_bin=/usr/lib/qt6/bin/qmlformat
+if [[ -n $qmlformat_bin ]]; then
+  "$qmlformat_bin" extras/plugin/Service.qml >/dev/null
+  "$qmlformat_bin" extras/plugin/BarWidget.qml >/dev/null
+fi
+
+if [[ ${NEON_OVERDRIVE_SKIP_LIFECYCLE_TEST:-false} != true ]]; then
+  NEON_OVERDRIVE_SKIP_LIFECYCLE_TEST=true "$repo_dir/tests/install-lifecycle.sh"
 fi
 
 printf 'Neon Overdrive validation passed.\n'

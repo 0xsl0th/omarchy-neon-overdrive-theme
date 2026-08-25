@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "neon-overdrive.cava",
   "name": "Neon Cava Spectrum",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "0xsl0th",
-  "description": "A real-time magenta-to-cyan Cava spectrum for the Omarchy bar",
+  "description": "A real-time Cava spectrum with music-reactive wallpaper color grading",
   "kinds": [
     "service",
     "bar-widget"
@@ -19,6 +19,51 @@
     "description": "Audio-reactive neon spectrum",
     "category": "Media",
     "allowMultiple": false,
-    "defaultSection": "center"
+    "defaultSection": "center",
+    "defaults": {
+      "width": 104,
+      "showIdle": true,
+      "glow": true,
+      "wallpaperReactive": true,
+      "wallpaperIntensity": 60
+    },
+    "schema": [
+      {
+        "key": "width",
+        "type": "integer",
+        "label": "Spectrum width",
+        "min": 72,
+        "max": 180,
+        "step": 4,
+        "defaultValue": 104
+      },
+      {
+        "key": "showIdle",
+        "type": "boolean",
+        "label": "Show while quiet",
+        "defaultValue": true
+      },
+      {
+        "key": "glow",
+        "type": "boolean",
+        "label": "Spectrum glow",
+        "defaultValue": true
+      },
+      {
+        "key": "wallpaperReactive",
+        "type": "boolean",
+        "label": "React on the wallpaper",
+        "defaultValue": true
+      },
+      {
+        "key": "wallpaperIntensity",
+        "type": "integer",
+        "label": "Wallpaper pulse intensity",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 60
+      }
+    ]
   }
 }

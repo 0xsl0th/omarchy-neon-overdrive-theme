@@ -8,27 +8,65 @@ data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 runtime_dir="${XDG_RUNTIME_DIR:-}"
 video="$data_home/neon-overdrive/neon-city-loop.mp4"
 pid_file="${runtime_dir:+$runtime_dir/}neon-overdrive-wallpaper.pid"
+ipc_socket="${runtime_dir:+$runtime_dir/}neon-overdrive-wallpaper.sock"
+ready_file="${runtime_dir:+$runtime_dir/}neon-overdrive-wallpaper.ready"
+lock_file="${runtime_dir:+$runtime_dir/}neon-overdrive-wallpaper.lock"
 
 is_ours() {
   local pid="${1:-}"
+  local process_name=""
+
   [[ $pid =~ ^[0-9]+$ ]] || return 1
-  [[ -r "/proc/$pid/cmdline" ]] || return 1
-  tr '\0' ' ' <"/proc/$pid/cmdline" | grep -Fq -- "$video"
+  [[ -r "/proc/$pid/comm" && -r "/proc/$pid/cmdline" ]] || return 1
+  read -r process_name <"/proc/$pid/comm" || return 1
+  [[ $process_name == mpvpaper ]] || return 1
+  grep -Fzqx -- "$video" "/proc/$pid/cmdline"
 }
 
 stop_wallpaper() {
   local pid=""
 
-  if [[ -n "$runtime_dir" && -r "$pid_file" ]]; then
-    read -r pid <"$pid_file" || true
-    if is_ours "$pid"; then
-      kill "$pid"
-      for _ in {1..40}; do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 0.05
-      done
+  if [[ -n "$runtime_dir" ]]; then
+    if [[ -r "$pid_file" ]]; then
+      read -r pid <"$pid_file" || true
+      if is_ours "$pid"; then
+        if ! kill "$pid" 2>/dev/null; then
+          if is_ours "$pid"; then
+            printf 'Neon Overdrive: could not stop wallpaper process %s.\n' "$pid" >&2
+            return 1
+          fi
+        fi
+        for _ in {1..80}; do
+          is_ours "$pid" || break
+          sleep 0.05
+        done
+        if is_ours "$pid"; then
+          printf 'Neon Overdrive: wallpaper process %s did not stop.\n' "$pid" >&2
+          return 1
+        fi
+      fi
     fi
-    rm -f -- "$pid_file"
+    rm -f -- "$pid_file" "$ipc_socket" "$ready_file"
+  fi
+}
+
+wallpaper_status() {
+  local pid=""
+  local ready_pid=""
+  local response=""
+
+  [[ -n "$runtime_dir" && -r "$pid_file" && -r "$ready_file" && -S $ipc_socket ]] || return 1
+  read -r pid <"$pid_file" || return 1
+  read -r ready_pid <"$ready_file" || return 1
+  [[ $pid == "$ready_pid" ]] || return 1
+  is_ours "$pid" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+
+  if command -v socat >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && \
+    command -v timeout >/dev/null 2>&1; then
+    response=$(timeout 1 socat - "UNIX-CONNECT:$ipc_socket" \
+      <<<'{"command":["get_property","brightness"]}' 2>/dev/null) || return 1
+    jq -e '.error == "success"' <<<"$response" >/dev/null || return 1
   fi
 }
 
@@ -38,14 +76,22 @@ case "${1:-start}" in
     stop_wallpaper
     exit 0
     ;;
+  status)
+    wallpaper_status
+    exit
+    ;;
   *)
-    printf 'Usage: %s [start|stop]\n' "${0##*/}" >&2
+    printf 'Usage: %s [start|stop|status]\n' "${0##*/}" >&2
     exit 2
     ;;
 esac
 
 command -v mpvpaper >/dev/null 2>&1 || {
   printf 'Neon Overdrive: mpvpaper is not installed.\n' >&2
+  exit 127
+}
+command -v flock >/dev/null 2>&1 || {
+  printf 'Neon Overdrive: flock is required to serialize wallpaper startup.\n' >&2
   exit 127
 }
 [[ -n "$runtime_dir" ]] || {
@@ -57,20 +103,74 @@ command -v mpvpaper >/dev/null 2>&1 || {
   exit 1
 }
 
+exec 9>"$lock_file"
+launcher_lock_acquired=false
+for _ in {1..100}; do
+  if flock -n 9; then
+    launcher_lock_acquired=true
+    break
+  fi
+  wallpaper_status && exit 0
+  sleep 0.1
+done
+$launcher_lock_acquired || {
+  printf 'Neon Overdrive: another wallpaper launcher did not become ready.\n' >&2
+  exit 1
+}
+
 if [[ -r "$pid_file" ]]; then
   read -r existing_pid <"$pid_file" || true
-  is_ours "$existing_pid" && exit 0
+  if is_ours "$existing_pid"; then
+    wallpaper_status && exit 0
+    stop_wallpaper
+  fi
 fi
 
+rm -f -- "$ipc_socket" "$ready_file"
 printf '%s\n' "$$" >"$pid_file"
-trap 'rm -f -- "$pid_file"' EXIT
+trap 'rm -f -- "$pid_file" "$ipc_socket" "$ready_file"' EXIT
+
+mpv_options="config=no load-scripts=no ytdl=no no-audio loop-file=inf hwdec=auto-safe profile=fast really-quiet osc=no input-default-bindings=no scale=bilinear cscale=bilinear dscale=bilinear deband=no vd-lavc-threads=2 input-ipc-server=$ipc_socket"
 
 mpvpaper \
   --auto-pause \
-  --mpv-options 'no-audio loop-file=inf hwdec=no profile=fast really-quiet osc=no input-default-bindings=no scale=bilinear cscale=bilinear dscale=bilinear deband=no' \
+  --mpv-options "$mpv_options" \
   ALL "$video" &
 wallpaper_pid=$!
 
 printf '%s\n' "$wallpaper_pid" >"$pid_file"
-trap 'kill "$wallpaper_pid" 2>/dev/null || true; rm -f -- "$pid_file"' EXIT INT TERM HUP
+trap 'kill "$wallpaper_pid" 2>/dev/null || true; rm -f -- "$pid_file" "$ipc_socket" "$ready_file"' EXIT INT TERM HUP
+
+wallpaper_ready=false
+for _ in {1..40}; do
+  if [[ -S $ipc_socket ]]; then
+    wallpaper_ready=true
+    break
+  fi
+  kill -0 "$wallpaper_pid" 2>/dev/null || break
+  sleep 0.05
+done
+$wallpaper_ready || {
+  printf 'Neon Overdrive: mpvpaper did not create its control socket.\n' >&2
+  exit 1
+}
+
+# The stock image layer would cover mpvpaper. At login it may start after this
+# launcher, so retry briefly and disable it only once the live wallpaper is up.
+if command -v omarchy >/dev/null 2>&1; then
+  background_disabled=false
+  for _ in {1..30}; do
+    if omarchy plugin disable omarchy.background >/dev/null 2>&1; then
+      background_disabled=true
+      break
+    fi
+    sleep 0.2
+  done
+  $background_disabled || {
+    printf 'Neon Overdrive: could not disable the stock background after the live wallpaper became ready.\n' >&2
+    exit 1
+  }
+fi
+
+printf '%s\n' "$wallpaper_pid" >"$ready_file"
 wait "$wallpaper_pid"

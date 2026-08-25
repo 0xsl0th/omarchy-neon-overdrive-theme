@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+case "${1:-}" in
+  reload | configerrors) exit 0 ;;
+  *) exit 0 ;;
+esac

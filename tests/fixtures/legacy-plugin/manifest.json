@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "sloth.cava",
+  "name": "Legacy Neon Cava",
+  "version": "0.1.0",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" }
+}
